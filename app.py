@@ -1,6 +1,7 @@
 
 import streamlit as st
 import pandas as pd
+import joblib
 
 
 # =========================================================
@@ -21,7 +22,7 @@ st.set_page_config(
 
 @st.cache_data
 def load_data():
-    return pd.read_csv("college_match.csv")
+    return joblib.load("college_match_model.pkl")
 
 
 df = load_data()
