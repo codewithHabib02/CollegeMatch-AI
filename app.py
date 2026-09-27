@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import joblib
@@ -17,19 +16,31 @@ st.set_page_config(
 
 
 # =========================================================
-# LOAD DATA
+# LOAD COLLEGE DATA
 # =========================================================
 
 @st.cache_data
 def load_data():
-    return joblib.load("college_match_model.pkl")
+    return pd.read_csv("college_match.csv")
 
 
 df = load_data()
 
 
 # =========================================================
-# REQUIRED COLUMNS
+# LOAD TRAINED MODEL
+# =========================================================
+
+@st.cache_resource
+def load_model():
+    return joblib.load("college_match_model.pkl")
+
+
+model = load_model()
+
+
+# =========================================================
+# CHECK DATA
 # =========================================================
 
 required_columns = [
@@ -44,17 +55,14 @@ required_columns = [
 ]
 
 missing_columns = [
-    col
-    for col in required_columns
+    col for col in required_columns
     if col not in df.columns
 ]
 
 if missing_columns:
-
     st.error(
         f"Missing columns in college_match.csv: {missing_columns}"
     )
-
     st.stop()
 
 
@@ -74,11 +82,9 @@ df = df.dropna(
 st.markdown(
     """
     <style>
-
     .stApp {
         background-color: #F4F7FB;
     }
-
     </style>
     """,
     unsafe_allow_html=True
@@ -91,7 +97,9 @@ st.markdown(
 
 st.title("🎓 CollegeMatch AI")
 
-st.subheader("Find colleges that fit your preferences.")
+st.subheader(
+    "Find colleges that fit your preferences."
+)
 
 st.write(
     "Choose your academic, financial, location, and "
@@ -108,7 +116,9 @@ st.divider()
 
 st.sidebar.title("🎓 CollegeMatch AI")
 
-st.sidebar.write("Set your college preferences.")
+st.sidebar.write(
+    "Set your college preferences."
+)
 
 st.sidebar.divider()
 
@@ -120,7 +130,7 @@ st.sidebar.header("Your Preferences")
 # =========================================================
 
 states = sorted(
-    df["STABBR"].unique()
+    df["STABBR"].dropna().unique()
 )
 
 selected_state = st.sidebar.selectbox(
@@ -219,180 +229,97 @@ find_colleges = st.sidebar.button(
 
 
 # =========================================================
-# MATCHING FUNCTION
+# MODEL PREDICTION FUNCTION
 # =========================================================
 
-def calculate_match_score(row):
+def get_model_predictions(data):
 
-    scores = []
+    # Copy college data
+    model_data = data.copy()
 
     # -----------------------------------------------------
-    # STATE
+    # Get features expected by the trained model
     # -----------------------------------------------------
 
-    if selected_state == "Any":
+    if hasattr(model, "feature_names_in_"):
 
-        state_score = 100
+        model_features = list(model.feature_names_in_)
 
     else:
 
-        state_score = (
-            100
-            if row["STABBR"] == selected_state
-            else 0
+        st.error(
+            "The trained model does not expose its feature names. "
+            "The model training features must match the data supplied "
+            "to the model."
         )
 
-    scores.append(state_score)
+        st.stop()
 
 
     # -----------------------------------------------------
-    # COLLEGE TYPE
+    # Check that required model features exist
     # -----------------------------------------------------
 
-    if college_type == "Any":
+    missing_features = [
+        col for col in model_features
+        if col not in model_data.columns
+    ]
 
-        type_score = 100
+    if missing_features:
 
-    elif college_type == "Public":
-
-        type_score = (
-            100
-            if row["CONTROL"] == 1
-            else 0
+        st.error(
+            "The trained model expects these features, but they are "
+            f"not available in college_match.csv: {missing_features}"
         )
 
-    else:
-
-        type_score = (
-            100
-            if row["CONTROL"] != 1
-            else 0
-        )
-
-    scores.append(type_score)
+        st.stop()
 
 
     # -----------------------------------------------------
-    # TUITION
+    # Create model input
     # -----------------------------------------------------
 
-    if row["TUITIONFEE_OUT"] <= max_tuition:
-
-        tuition_score = 100
-
-    else:
-
-        difference = (
-            row["TUITIONFEE_OUT"]
-            - max_tuition
-        )
-
-        tuition_score = max(
-            0,
-            100
-            - (
-                difference
-                / max_tuition
-                * 100
-            )
-        )
-
-    scores.append(tuition_score)
+    X = model_data[model_features].copy()
 
 
     # -----------------------------------------------------
-    # SAT
+    # Prediction
     # -----------------------------------------------------
 
-    if row["SAT_AVG"] >= min_sat:
+    try:
 
-        sat_score = 100
+        # Classification model
+        if hasattr(model, "predict_proba"):
 
-    else:
+            probabilities = model.predict_proba(X)
 
-        difference = (
-            min_sat
-            - row["SAT_AVG"]
-        )
+            # Probability of positive class
+            if probabilities.shape[1] == 2:
 
-        sat_score = max(
-            0,
-            100
-            - (
-                difference
-                / min_sat
-                * 100
-            )
-        )
+                predictions = probabilities[:, 1]
 
-    scores.append(sat_score)
+            else:
 
+                predictions = probabilities.max(axis=1)
 
-    # -----------------------------------------------------
-    # ACT
-    # -----------------------------------------------------
-
-    if row["ACTCMMID"] >= min_act:
-
-        act_score = 100
-
-    else:
-
-        difference = (
-            min_act
-            - row["ACTCMMID"]
-        )
-
-        act_score = max(
-            0,
-            100
-            - (
-                difference
-                / min_act
-                * 100
-            )
-        )
-
-    scores.append(act_score)
-
-
-    # -----------------------------------------------------
-    # COLLEGE SIZE
-    # -----------------------------------------------------
-
-    if college_size == "Any":
-
-        size_score = 100
-
-    elif college_size == "Small":
-
-        if row["UGDS"] < 5000:
-            size_score = 100
         else:
-            size_score = 0
 
-    elif college_size == "Medium":
-
-        if 5000 <= row["UGDS"] <= 15000:
-            size_score = 100
-        else:
-            size_score = 0
-
-    else:
-
-        if row["UGDS"] > 15000:
-            size_score = 100
-        else:
-            size_score = 0
-
-    scores.append(size_score)
+            # Regression model
+            predictions = model.predict(X)
 
 
-    # -----------------------------------------------------
-    # FINAL SCORE
-    # -----------------------------------------------------
+    except Exception as e:
 
-    return sum(scores) / len(scores)
+        st.error(
+            "The trained model could not process the college data."
+        )
+
+        st.exception(e)
+
+        st.stop()
+
+
+    return predictions
 
 
 # =========================================================
@@ -404,19 +331,131 @@ if find_colleges:
     results = df.copy()
 
 
-    # -----------------------------------------------------
-    # CALCULATE SCORE
-    # -----------------------------------------------------
+    # =====================================================
+    # APPLY USER FILTERS
+    # =====================================================
 
-    results["Match Score"] = results.apply(
-        calculate_match_score,
-        axis=1
-    )
+    if selected_state != "Any":
+
+        results = results[
+            results["STABBR"] == selected_state
+        ]
 
 
-    # -----------------------------------------------------
+    if college_type == "Public":
+
+        results = results[
+            results["CONTROL"] == 1
+        ]
+
+    elif college_type == "Private":
+
+        results = results[
+            results["CONTROL"] != 1
+        ]
+
+
+    # =====================================================
+    # COLLEGE SIZE FILTER
+    # =====================================================
+
+    if college_size == "Small":
+
+        results = results[
+            results["UGDS"] < 5000
+        ]
+
+    elif college_size == "Medium":
+
+        results = results[
+            (results["UGDS"] >= 5000)
+            &
+            (results["UGDS"] <= 15000)
+        ]
+
+    elif college_size == "Large":
+
+        results = results[
+            results["UGDS"] > 15000
+        ]
+
+
+    # =====================================================
+    # TUITION FILTER
+    # =====================================================
+
+    results = results[
+        results["TUITIONFEE_OUT"] <= max_tuition
+    ]
+
+
+    # =====================================================
+    # SAT FILTER
+    # =====================================================
+
+    results = results[
+        results["SAT_AVG"] >= min_sat
+    ]
+
+
+    # =====================================================
+    # ACT FILTER
+    # =====================================================
+
+    results = results[
+        results["ACTCMMID"] >= min_act
+    ]
+
+
+    # =====================================================
+    # CHECK RESULTS
+    # =====================================================
+
+    if results.empty:
+
+        st.warning(
+            "No colleges were found with these preferences. "
+            "Try changing your filters."
+        )
+
+        st.stop()
+
+
+    # =====================================================
+    # USE TRAINED MODEL
+    # =====================================================
+
+    predictions = get_model_predictions(results)
+
+
+    results["Match Score"] = predictions
+
+
+    # =====================================================
+    # CONVERT SCORE TO PERCENTAGE
+    # =====================================================
+
+    min_score = results["Match Score"].min()
+    max_score = results["Match Score"].max()
+
+
+    if max_score != min_score:
+
+        results["Match Score"] = (
+            (results["Match Score"] - min_score)
+            /
+            (max_score - min_score)
+            * 100
+        )
+
+    else:
+
+        results["Match Score"] = 100
+
+
+    # =====================================================
     # SORT
-    # -----------------------------------------------------
+    # =====================================================
 
     results = results.sort_values(
         "Match Score",
@@ -424,9 +463,9 @@ if find_colleges:
     )
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # TOP RESULTS
-    # -----------------------------------------------------
+    # =====================================================
 
     results = results.head(
         number_of_results
@@ -562,7 +601,7 @@ if find_colleges:
 
     st.write(
         "The highest-ranked college according to "
-        "your selected preferences."
+        "the trained machine-learning model."
     )
 
 
@@ -642,10 +681,6 @@ else:
     )
 
 
-    # =====================================================
-    # HOW IT WORKS
-    # =====================================================
-
     st.subheader("How It Works")
 
 
@@ -669,10 +704,10 @@ else:
 
         st.info(
             """
-            **2. Compare Colleges**
+            **2. Machine Learning Model**
 
-            The app compares each college
-            with your selected preferences.
+            The trained CollegeMatch AI model
+            analyzes the available college data.
             """
         )
 
@@ -683,8 +718,8 @@ else:
             """
             **3. Get Your Shortlist**
 
-            The colleges are sorted by
-            their match score.
+            Colleges are ranked according
+            to the model's predictions.
             """
         )
 
@@ -706,4 +741,3 @@ st.divider()
 st.caption(
     "Developed By Habibulie 🔴 alias Leda🟢 | Data Science Student."
 )
-
