@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import joblib
@@ -16,7 +17,7 @@ st.set_page_config(
 
 
 # =========================================================
-# LOAD TRAINED MODEL
+# LOAD MODEL
 # =========================================================
 
 @st.cache_resource
@@ -24,24 +25,41 @@ def load_model():
     return joblib.load("college_match_model.pkl")
 
 
-model = load_model()
+try:
+    model = load_model()
+
+except Exception as e:
+
+    st.error("Could not load college_match_model.pkl")
+
+    st.exception(e)
+
+    st.stop()
 
 
 # =========================================================
-# CHECK DATA
+# LOAD COLLEGE DATA
 # =========================================================
 
-required_columns = [
-    "INSTNM",
-    "CITY",
-    "STABBR",
-    "CONTROL",
-    "SAT_AVG",
-    "ACTCMMID",
-    "TUITIONFEE_OUT",
-    "UGDS"
-]
+@st.cache_data
+def load_data():
 
+    data = pd.read_csv("college_match.csv")
+
+    return data
+
+
+try:
+
+    df = load_data()
+
+except Exception as e:
+
+    st.error("Could not load college_match.csv")
+
+    st.exception(e)
+
+    st.stop()
 
 
 # =========================================================
@@ -51,9 +69,11 @@ required_columns = [
 st.markdown(
     """
     <style>
+
     .stApp {
         background-color: #F4F7FB;
     }
+
     </style>
     """,
     unsafe_allow_html=True
@@ -80,6 +100,52 @@ st.divider()
 
 
 # =========================================================
+# CHECK MODEL FEATURES
+# =========================================================
+
+if hasattr(model, "feature_names_in_"):
+
+    model_features = list(model.feature_names_in_)
+
+else:
+
+    st.error(
+        "The trained model does not contain feature_names_in_. "
+        "The original training code is required to identify "
+        "the exact features used by the model."
+    )
+
+    st.stop()
+
+
+# =========================================================
+# CHECK MODEL FEATURES EXIST IN DATA
+# =========================================================
+
+missing_features = [
+    feature
+    for feature in model_features
+    if feature not in df.columns
+]
+
+
+if missing_features:
+
+    st.error(
+        "The trained model expects columns that are missing "
+        "from college_match.csv:"
+    )
+
+    st.write(missing_features)
+
+    st.write("Model expects:")
+
+    st.write(model_features)
+
+    st.stop()
+
+
+# =========================================================
 # SIDEBAR
 # =========================================================
 
@@ -92,6 +158,29 @@ st.sidebar.write(
 st.sidebar.divider()
 
 st.sidebar.header("Your Preferences")
+
+
+# =========================================================
+# STATE
+# =========================================================
+
+if "STABBR" in df.columns:
+
+    states = sorted(
+        df["STABBR"]
+        .dropna()
+        .astype(str)
+        .unique()
+    )
+
+    selected_state = st.sidebar.selectbox(
+        "State",
+        ["Any"] + states
+    )
+
+else:
+
+    selected_state = "Any"
 
 
 # =========================================================
@@ -189,110 +278,79 @@ find_colleges = st.sidebar.button(
 
 def get_model_predictions(data):
 
-    # Copy college data
-    model_data = data.copy()
-
-    # -----------------------------------------------------
-    # Get features expected by the trained model
-    # -----------------------------------------------------
-
-    if hasattr(model, "feature_names_in_"):
-
-        model_features = list(model.feature_names_in_)
-
-    else:
-
-        st.error(
-            "The trained model does not expose its feature names. "
-            "The model training features must match the data supplied "
-            "to the model."
-        )
-
-        st.stop()
-
-
-    # -----------------------------------------------------
-    # Check that required model features exist
-    # -----------------------------------------------------
-
-    missing_features = [
-        col for col in model_features
-        if col not in model_data.columns
-    ]
-
-    if missing_features:
-
-        st.error(
-            "The trained model expects these features, but they are "
-            f"not available in college_match.csv: {missing_features}"
-        )
-
-        st.stop()
-
-
-    # -----------------------------------------------------
-    # Create model input
-    # -----------------------------------------------------
-
-    X = model_data[model_features].copy()
-
-
-    # -----------------------------------------------------
-    # Prediction
-    # -----------------------------------------------------
+    # Use EXACT features from trained model
+    X = data[model_features].copy()
 
     try:
 
+        # -------------------------------------------------
         # Classification model
+        # -------------------------------------------------
+
         if hasattr(model, "predict_proba"):
 
             probabilities = model.predict_proba(X)
 
-            # Probability of positive class
+            # Binary classification
             if probabilities.shape[1] == 2:
 
-                predictions = probabilities[:, 1]
+                scores = probabilities[:, 1]
 
+            # Multiclass classification
             else:
 
-                predictions = probabilities.max(axis=1)
+                scores = probabilities.max(axis=1)
+
+        # -------------------------------------------------
+        # Regression model
+        # -------------------------------------------------
 
         else:
 
-            # Regression model
-            predictions = model.predict(X)
-
+            scores = model.predict(X)
 
     except Exception as e:
 
         st.error(
-            "The trained model could not process the college data."
+            "The trained model could not process the "
+            "college data."
         )
 
         st.exception(e)
 
         st.stop()
 
-
-    return predictions
+    return scores
 
 
 # =========================================================
 # RUN MATCHING
 # =========================================================
 
+if find_colleges:
+
+    # -----------------------------------------------------
+    # COPY DATA
+    # -----------------------------------------------------
+
+    results = df.copy()
 
 
     # =====================================================
-    # APPLY USER FILTERS
+    # STATE FILTER
     # =====================================================
 
     if selected_state != "Any":
 
         results = results[
-            results["STABBR"] == selected_state
+            results["STABBR"].astype(str)
+            == selected_state
         ]
 
+
+    # =====================================================
+    # COLLEGE TYPE FILTER
+    # =====================================================
 
     if college_type == "Public":
 
@@ -374,27 +432,30 @@ def get_model_predictions(data):
 
 
     # =====================================================
-    # USE TRAINED MODEL
+    # MODEL PREDICTIONS
     # =====================================================
 
     predictions = get_model_predictions(results)
 
 
-    results["Match Score"] = predictions
+    results = results.copy()
+
+    results["Model Score"] = predictions
 
 
     # =====================================================
-    # CONVERT SCORE TO PERCENTAGE
+    # CONVERT MODEL SCORE TO 0-100
     # =====================================================
 
-    min_score = results["Match Score"].min()
-    max_score = results["Match Score"].max()
+    min_score = results["Model Score"].min()
+
+    max_score = results["Model Score"].max()
 
 
     if max_score != min_score:
 
         results["Match Score"] = (
-            (results["Match Score"] - min_score)
+            (results["Model Score"] - min_score)
             /
             (max_score - min_score)
             * 100
@@ -406,7 +467,7 @@ def get_model_predictions(data):
 
 
     # =====================================================
-    # SORT
+    # SORT RESULTS
     # =====================================================
 
     results = results.sort_values(
@@ -425,7 +486,7 @@ def get_model_predictions(data):
 
 
     # =====================================================
-    # RESULTS
+    # RESULTS HEADER
     # =====================================================
 
     st.header("🎓 Your College Matches")
@@ -437,25 +498,30 @@ def get_model_predictions(data):
 
 
     # =====================================================
-    # RESULTS TABLE
+    # DISPLAY TABLE
     # =====================================================
 
+    display_columns = [
+        "INSTNM",
+        "CITY",
+        "STABBR",
+        "CONTROL",
+        "SAT_AVG",
+        "ACTCMMID",
+        "TUITIONFEE_OUT",
+        "UGDS",
+        "Match Score"
+    ]
+
+
     display_df = results[
-        [
-            "INSTNM",
-            "CITY",
-            "STABBR",
-            "CONTROL",
-            "SAT_AVG",
-            "ACTCMMID",
-            "TUITIONFEE_OUT",
-            "UGDS",
-            "Match Score"
-        ]
+        display_columns
     ].copy()
 
 
-    # College type
+    # =====================================================
+    # COLLEGE TYPE
+    # =====================================================
 
     display_df["CONTROL"] = display_df[
         "CONTROL"
@@ -466,28 +532,37 @@ def get_model_predictions(data):
     })
 
 
+    # =====================================================
     # SAT
+    # =====================================================
 
     display_df["SAT_AVG"] = (
         display_df["SAT_AVG"]
+        .fillna(0)
         .round(0)
         .astype(int)
     )
 
 
+    # =====================================================
     # ACT
+    # =====================================================
 
     display_df["ACTCMMID"] = (
         display_df["ACTCMMID"]
+        .fillna(0)
         .round(0)
         .astype(int)
     )
 
 
-    # Tuition
+    # =====================================================
+    # TUITION
+    # =====================================================
 
     display_df["TUITIONFEE_OUT"] = (
         display_df["TUITIONFEE_OUT"]
+        .fillna(0)
         .round(0)
         .apply(
             lambda x: f"${x:,.0f}"
@@ -495,10 +570,13 @@ def get_model_predictions(data):
     )
 
 
-    # Students
+    # =====================================================
+    # STUDENTS
+    # =====================================================
 
     display_df["UGDS"] = (
         display_df["UGDS"]
+        .fillna(0)
         .round(0)
         .apply(
             lambda x: f"{x:,.0f}"
@@ -506,7 +584,9 @@ def get_model_predictions(data):
     )
 
 
-    # Match score
+    # =====================================================
+    # MATCH SCORE
+    # =====================================================
 
     display_df["Match Score"] = (
         display_df["Match Score"]
@@ -516,7 +596,9 @@ def get_model_predictions(data):
     )
 
 
-    # Rename columns
+    # =====================================================
+    # RENAME COLUMNS
+    # =====================================================
 
     display_df.columns = [
         "College",
@@ -544,7 +626,7 @@ def get_model_predictions(data):
 
 
     # =====================================================
-    # TOP MATCH
+    # TOP COLLEGE
     # =====================================================
 
     st.divider()
@@ -552,8 +634,8 @@ def get_model_predictions(data):
     st.header("⭐ Top College Match")
 
     st.write(
-        "The highest-ranked college according to "
-        "the trained machine-learning model."
+        "The college ranked highest by the trained "
+        "machine-learning model among the filtered results."
     )
 
 
@@ -600,7 +682,7 @@ def get_model_predictions(data):
 
 
     # =====================================================
-    # TOP MATCH DETAILS
+    # DETAILS
     # =====================================================
 
     st.write(
