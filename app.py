@@ -98,10 +98,6 @@ st.sidebar.header("Your Preferences")
 # STATE
 # =========================================================
 
-states = sorted(
-    df["STABBR"].dropna().unique()
-)
-
 selected_state = st.sidebar.selectbox(
     "Preferred State",
     ["Any"] + states
