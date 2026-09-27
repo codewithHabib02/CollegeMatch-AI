@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import joblib
@@ -40,7 +41,12 @@ def load_data():
     return pd.read_csv("college_match.csv")
 
 
-df = load_data()
+try:
+    df = load_data()
+except Exception as e:
+    st.error("Could not load college_match.csv")
+    st.exception(e)
+    st.stop()
 
 
 # =========================================================
@@ -52,11 +58,16 @@ def load_model():
     return joblib.load("college_match_model.pkl")
 
 
-model = load_model()
+try:
+    model = load_model()
+except Exception as e:
+    st.error("Could not load college_match_model.pkl")
+    st.exception(e)
+    st.stop()
 
 
 # =========================================================
-# REQUIRED COLUMNS
+# REQUIRED COLLEGE DATA COLUMNS
 # =========================================================
 
 required_columns = [
@@ -70,12 +81,10 @@ required_columns = [
     "UGDS"
 ]
 
-
 missing_columns = [
     column for column in required_columns
     if column not in df.columns
 ]
-
 
 if missing_columns:
     st.error(
@@ -92,6 +101,7 @@ if missing_columns:
 df = df.dropna(
     subset=[
         "INSTNM",
+        "CITY",
         "STABBR",
         "CONTROL",
         "SAT_AVG",
@@ -126,7 +136,9 @@ st.sidebar.header("🎯 Your College Preferences")
 
 
 # State
-states = sorted(df["STABBR"].dropna().unique())
+states = sorted(
+    df["STABBR"].astype(str).dropna().unique()
+)
 
 selected_state = st.sidebar.selectbox(
     "Preferred State",
@@ -187,24 +199,121 @@ number_of_colleges = st.sidebar.slider(
 
 
 # =========================================================
-# CREATE MODEL INPUTS
+# CREATE MODEL FEATURES
 # =========================================================
 
 def prepare_model_data(data):
     """
-    Prepare college information for the trained model.
+    Create the exact features expected by the trained model.
     """
 
-    model_data = data[
-        [
-            "SAT_AVG",
-            "ACTCMMID",
-            "TUITIONFEE_OUT",
-            "UGDS"
-        ]
-    ].copy()
+    model_data = data.copy()
 
-    return model_data
+    # -----------------------------------------------------
+    # TUITION MATCH
+    # -----------------------------------------------------
+
+    model_data["tuition_match"] = (
+        model_data["TUITIONFEE_OUT"] <= max_tuition
+    ).astype(int)
+
+
+    # -----------------------------------------------------
+    # STATE MATCH
+    # -----------------------------------------------------
+
+    if selected_state == "Any":
+        model_data["state_match"] = 1
+
+    else:
+        model_data["state_match"] = (
+            model_data["STABBR"] == selected_state
+        ).astype(int)
+
+
+    # -----------------------------------------------------
+    # TYPE MATCH
+    # -----------------------------------------------------
+
+    if college_type == "Any":
+
+        model_data["type_match"] = 1
+
+    elif college_type == "Public":
+
+        model_data["type_match"] = (
+            model_data["CONTROL"] == 1
+        ).astype(int)
+
+    else:
+
+        model_data["type_match"] = (
+            model_data["CONTROL"] != 1
+        ).astype(int)
+
+
+    # -----------------------------------------------------
+    # SAT MATCH
+    # -----------------------------------------------------
+
+    model_data["sat_match"] = (
+        model_data["SAT_AVG"] >= min_sat
+    ).astype(int)
+
+
+    # -----------------------------------------------------
+    # ACT MATCH
+    # -----------------------------------------------------
+
+    model_data["act_match"] = (
+        model_data["ACTCMMID"] >= min_act
+    ).astype(int)
+
+
+    # -----------------------------------------------------
+    # SIZE MATCH
+    # -----------------------------------------------------
+
+    if college_size == "Any":
+
+        model_data["size_match"] = 1
+
+    elif college_size == "Small":
+
+        model_data["size_match"] = (
+            model_data["UGDS"] < 5000
+        ).astype(int)
+
+    elif college_size == "Medium":
+
+        model_data["size_match"] = (
+            (model_data["UGDS"] >= 5000) &
+            (model_data["UGDS"] <= 15000)
+        ).astype(int)
+
+    else:
+
+        model_data["size_match"] = (
+            model_data["UGDS"] > 15000
+        ).astype(int)
+
+
+    # -----------------------------------------------------
+    # EXACT MODEL COLUMNS
+    # -----------------------------------------------------
+
+    model_columns = [
+        "INSTNM",
+        "CITY",
+        "tuition_match",
+        "state_match",
+        "type_match",
+        "sat_match",
+        "act_match",
+        "size_match"
+    ]
+
+    return model_data[model_columns]
 
 
 # =========================================================
@@ -221,6 +330,7 @@ if st.button("🔎 Find My Colleges", type="primary"):
     # -----------------------------------------------------
 
     if selected_state != "Any":
+
         results = results[
             results["STABBR"] == selected_state
         ]
@@ -244,7 +354,7 @@ if st.button("🔎 Find My Colleges", type="primary"):
 
 
     # -----------------------------------------------------
-    # CHECK IF RESULTS EXIST
+    # CHECK RESULTS
     # -----------------------------------------------------
 
     if results.empty:
@@ -258,10 +368,48 @@ if st.button("🔎 Find My Colleges", type="primary"):
 
 
     # -----------------------------------------------------
-    # MODEL INPUT
+    # CREATE MODEL INPUT
     # -----------------------------------------------------
 
     X_model = prepare_model_data(results)
+
+
+    # -----------------------------------------------------
+    # VERIFY MODEL FEATURES
+    # -----------------------------------------------------
+
+    if hasattr(model, "feature_names_in_"):
+
+        expected_features = list(
+            model.feature_names_in_
+        )
+
+        missing_features = [
+            column
+            for column in expected_features
+            if column not in X_model.columns
+        ]
+
+        if missing_features:
+
+            st.error(
+                f"The model still expects these missing columns: "
+                f"{missing_features}"
+            )
+
+            st.write(
+                "Model expects:"
+            )
+
+            st.write(expected_features)
+
+            st.write(
+                "App is providing:"
+            )
+
+            st.write(list(X_model.columns))
+
+            st.stop()
 
 
     # -----------------------------------------------------
@@ -270,38 +418,82 @@ if st.button("🔎 Find My Colleges", type="primary"):
 
     try:
 
-        predictions = model.predict(X_model)
+        # Classification model
+        if hasattr(model, "predict_proba"):
 
-        results["Match Score"] = predictions
+            probabilities = model.predict_proba(X_model)
+
+            if probabilities.shape[1] == 2:
+
+                predictions = probabilities[:, 1]
+
+            else:
+
+                predictions = probabilities.max(axis=1)
+
+        else:
+
+            predictions = model.predict(X_model)
 
     except Exception as e:
 
         st.error(
-            "The trained model could not process these inputs. "
-            "This usually means the model was trained with different "
-            "features than the ones supplied by the app."
+            "The trained model could not process these inputs."
         )
 
         st.code(str(e))
+
+        st.write(
+            "Model expects:"
+        )
+
+        if hasattr(model, "feature_names_in_"):
+            st.write(
+                list(model.feature_names_in_)
+            )
+
+        st.write(
+            "App provided:"
+        )
+
+        st.write(
+            list(X_model.columns)
+        )
 
         st.stop()
 
 
     # -----------------------------------------------------
-    # CONVERT PREDICTIONS TO DISPLAY SCORE
+    # ADD PREDICTIONS
     # -----------------------------------------------------
 
-    if results["Match Score"].dtype != "object":
+    results["Match Score"] = predictions
+
+
+    # -----------------------------------------------------
+    # CONVERT TO DISPLAY SCORE
+    # -----------------------------------------------------
+
+    if pd.api.types.is_numeric_dtype(
+        results["Match Score"]
+    ):
 
         min_prediction = results["Match Score"].min()
+
         max_prediction = results["Match Score"].max()
 
         if max_prediction != min_prediction:
 
             results["Match Score"] = (
-                (results["Match Score"] - min_prediction)
+                (
+                    results["Match Score"]
+                    - min_prediction
+                )
                 /
-                (max_prediction - min_prediction)
+                (
+                    max_prediction
+                    - min_prediction
+                )
                 * 100
             )
 
@@ -324,7 +516,9 @@ if st.button("🔎 Find My Colleges", type="primary"):
     # LIMIT RESULTS
     # -----------------------------------------------------
 
-    results = results.head(number_of_colleges)
+    results = results.head(
+        number_of_colleges
+    )
 
 
     # =====================================================
@@ -335,7 +529,6 @@ if st.button("🔎 Find My Colleges", type="primary"):
         f"Found {len(results)} colleges matching your preferences."
     )
 
-
     st.subheader("🏆 Your College Matches")
 
 
@@ -344,7 +537,6 @@ if st.button("🔎 Find My Colleges", type="primary"):
     # -----------------------------------------------------
 
     top_college = results.iloc[0]
-
 
     st.markdown(
         f"""
@@ -389,7 +581,8 @@ if st.button("🔎 Find My Colleges", type="primary"):
 
 
     display_results["Match Score"] = (
-        display_results["Match Score"].round(1)
+        display_results["Match Score"]
+        .round(1)
     )
 
 
@@ -411,6 +604,7 @@ if st.button("🔎 Find My Colleges", type="primary"):
 
 
     with col1:
+
         st.metric(
             "SAT",
             int(top_college["SAT_AVG"])
@@ -418,6 +612,7 @@ if st.button("🔎 Find My Colleges", type="primary"):
 
 
     with col2:
+
         st.metric(
             "ACT",
             int(top_college["ACTCMMID"])
@@ -425,6 +620,7 @@ if st.button("🔎 Find My Colleges", type="primary"):
 
 
     with col3:
+
         st.metric(
             "Tuition",
             f"${int(top_college['TUITIONFEE_OUT']):,}"
@@ -432,6 +628,7 @@ if st.button("🔎 Find My Colleges", type="primary"):
 
 
     with col4:
+
         st.metric(
             "Enrollment",
             f"{int(top_college['UGDS']):,}"
