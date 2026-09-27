@@ -42,10 +42,7 @@ required_columns = [
     "UGDS"
 ]
 
-missing_columns = [
-    col for col in required_columns
-    if col not in df.columns
-]
+
 
 if missing_columns:
     st.error(
