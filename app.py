@@ -281,9 +281,6 @@ def get_model_predictions(data):
 # RUN MATCHING
 # =========================================================
 
-if find_colleges:
-
-    results = df.copy()
 
 
     # =====================================================
