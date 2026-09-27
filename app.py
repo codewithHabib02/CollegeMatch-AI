@@ -43,14 +43,6 @@ required_columns = [
 ]
 
 
-
-if missing_columns:
-    st.error(
-        f"Missing columns in college_match.csv: {missing_columns}"
-    )
-    st.stop()
-
-
 # =========================================================
 # CLEAN DATA
 # =========================================================
